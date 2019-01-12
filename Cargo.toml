@@ -1,0 +1,9 @@
+[package]
+name = "toy-rust-shell"
+version = "0.1.0"
+authors = ["Zoltan Nagy <abesto0@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+im = "*"
+termion = "*"
