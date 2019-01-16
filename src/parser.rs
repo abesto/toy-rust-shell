@@ -98,7 +98,7 @@ mod split_words {
     fn handle_char<'a>(state: &mut State<'a>) {
         // 1. If the end of input is recognized, the current token (if any) shall be delimited.
         if state.is_eof() {
-            println!("EOF");
+            //println!("EOF");
             state.delimit();
         }
         // 2. If the previous character was used as part of an operator and the
@@ -106,7 +106,7 @@ mod split_words {
         // characters to form an operator, it shall be used as part of that
         // (operator) token.
         else if extend_operator(state) {
-            println!("EXTEND OPERATOR");
+            //println!("EXTEND OPERATOR");
             state.consume();
         }
         // 3. If the previous character was used as part of an operator and the
@@ -151,7 +151,7 @@ mod split_words {
         // the next (operator) token.
         // TODO check quoting
         else if state.current_character_in(OPERATOR_START) {
-            println!("OPERATOR_START -> delimit consume");
+            //println!("OPERATOR_START -> delimit consume");
             state.delimit();
             state.consume();
         }
@@ -160,7 +160,7 @@ mod split_words {
         // character shall be discarded.
         // TODO check quoting
         else if state.current_character_in(BLANK) {
-            println!("BLANK -> delimit skip");
+            //println!("BLANK -> delimit skip");
             state.delimit();
             state.skip();
         }
@@ -173,7 +173,7 @@ mod split_words {
             .last()
             .map_or(false, |c| !OPERATOR_START.contains(c))
         {
-            println!("NOT OPERATOR_START -> consume");
+            //println!("NOT OPERATOR_START -> consume");
             state.consume();
         }
         // 9. If the current character is a '#', it and all subsequent
@@ -181,14 +181,14 @@ mod split_words {
         // discarded as a comment. The <newline> that ends the line is not
         // considered part of the comment.
         else if state.current_character_is('#') {
-            println!("COMMENT -> last");
+            //println!("COMMENT -> last");
             while !state.is_eof() {
                 state.skip();
             }
         }
         // 10. The current character is used as the start of a new word.
         else {
-            println!("NEW WORD -> delimit consume");
+            //println!("NEW WORD -> delimit consume");
             state.delimit();
             state.consume();
         }
@@ -267,17 +267,6 @@ mod lexer {
             return l.tokens;
         }
 
-        fn run(input: &'a Vec<String>) -> Vec<Token> {
-            Lexer::apply(input, |lexer| {
-                while lexer.iterator.peek().is_some() {
-                    let _ = lexer.andif()
-                        || lexer.orif()
-                        || lexer.single_char_operator()
-                        || lexer.word();
-                }
-            })
-        }
-
         // Helpers for individual token recognizers
         fn recognize(&mut self, token: Token) -> bool {
             self.tokens.push(token);
@@ -325,10 +314,19 @@ mod lexer {
         }
     }
 
+    pub fn scan(input: &Vec<String>) -> Vec<Token> {
+        Lexer::apply(input, |lexer| {
+            while lexer.iterator.peek().is_some() {
+                let _ =
+                    lexer.andif() || lexer.orif() || lexer.single_char_operator() || lexer.word();
+            }
+        })
+    }
+
     #[cfg(test)]
     mod tests {
-        use super::super::split_words;
         use super::{Lexer, Token};
+        use crate::parser::split_words;
 
         fn assert_apply(input: &str, expected: Vec<Token>, logic: fn(&mut Lexer) -> ()) {
             let words = &split_words::scan(&input.to_string());
@@ -337,7 +335,7 @@ mod lexer {
 
         fn assert_lex(input: &str, expected: Vec<Token>) {
             let words = &split_words::scan(&input.to_string());
-            assert_eq!(Lexer::run(words), expected);
+            assert_eq!(super::scan(words), expected);
         }
 
         fn word(input: &str) -> Token {
@@ -374,4 +372,143 @@ mod lexer {
             );
         }
     }
+}
+
+pub mod grammar {
+    use super::lexer::Token;
+    use std::iter;
+    use std::slice;
+
+    pub type Program<'a> = Vec<CompleteCommand<'a>>;
+
+    #[derive(Debug, Eq, PartialEq)]
+    pub enum CompleteCommand<'a> {
+        WithSep(List<'a>, SeparatorOp),
+        WithoutSep(List<'a>),
+    }
+
+    #[derive(Debug, Eq, PartialEq)]
+    pub enum List<'a> {
+        Single(AndOr<'a>),
+        Multi(&'a List<'a>, SeparatorOp, AndOr<'a>),
+    }
+
+    #[derive(Debug, Eq, PartialEq)]
+    pub enum SeparatorOp {
+        Ampersand,
+        Semicolon,
+    }
+
+    #[derive(Debug, Eq, PartialEq)]
+    pub enum AndOr<'a> {
+        Single(Pipeline),
+        And(&'a AndOr<'a>, Pipeline),
+        Or(&'a AndOr<'a>, Pipeline),
+    }
+
+    #[derive(Debug, Eq, PartialEq)]
+    pub struct Pipeline {
+        pub has_bang: bool,
+        pub pipe_sequence: PipeSequence,
+    }
+
+    pub type PipeSequence = Vec<Command>;
+
+    #[derive(Debug, Eq, PartialEq)]
+    pub enum Command {
+        SimpleCommand(SimpleCommandData),
+        CompoundCommand(CompoundCommandData),
+        CompoundCommandWithRedirects(CompoundCommandWithRedirectsData),
+        FunctionDefinition(FunctionDefinitionData),
+    }
+
+    #[derive(Debug, Eq, PartialEq)]
+    pub enum SimpleCommandData {
+        PrefixWordSuffix(CmdPrefix, CmdWord, CmdSuffix),
+        PrefixWord(CmdPrefix, CmdWord),
+        Prefix(CmdPrefix),
+        NameSuffix(CmdName, CmdSuffix),
+        Name(CmdName),
+    }
+
+    pub type CmdName = String;
+
+    pub type CmdWord = String;
+
+    // Placeholders
+
+    #[derive(Debug, Eq, PartialEq)]
+    pub enum CmdPrefix {}
+
+    #[derive(Debug, Eq, PartialEq)]
+    pub enum CmdSuffix {}
+
+    #[derive(Debug, Eq, PartialEq)]
+    pub enum CompoundCommandData {}
+
+    #[derive(Debug, Eq, PartialEq)]
+    pub enum CompoundCommandWithRedirectsData {}
+
+    #[derive(Debug, Eq, PartialEq)]
+    pub enum FunctionDefinitionData {}
+
+    pub fn build_parse_tree<'a>(tokens: &Vec<Token>) -> Program<'a> {
+        let mut program: Program<'a> = vec![];
+        let mut iterator = tokens.iter().peekable();
+
+        while iterator.peek().is_some() {
+            program.push(complete_command(&mut iterator).unwrap());
+        }
+
+        program
+    }
+
+    fn complete_command<'a>(
+        iterator: &mut iter::Peekable<slice::Iter<Token>>,
+    ) -> Option<CompleteCommand<'a>> {
+        match iterator.next().unwrap() {
+            Token::Word(s) => Some(CompleteCommand::WithoutSep(List::Single(AndOr::Single(
+                Pipeline {
+                    has_bang: false,
+                    pipe_sequence: vec![Command::SimpleCommand(SimpleCommandData::Name(s.clone()))],
+                },
+            )))),
+            _ => None,
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn assert_tree(input: &str, expected: Program) {
+            assert_eq!(super::super::parse(&input.to_string()), expected);
+        }
+
+        #[test]
+        fn empty_input() {
+            assert_tree("", vec![]);
+        }
+
+        #[test]
+        fn ls() {
+            assert_tree(
+                "ls",
+                vec![CompleteCommand::WithoutSep(List::Single(AndOr::Single(
+                    Pipeline {
+                        has_bang: false,
+                        pipe_sequence: vec![Command::SimpleCommand(SimpleCommandData::Name(
+                            "ls".to_string(),
+                        ))],
+                    },
+                )))],
+            )
+        }
+    }
+}
+
+pub fn parse<'a>(input: &String) -> grammar::Program<'a> {
+    let words = &split_words::scan(&input);
+    let tokens = &lexer::scan(&words);
+    grammar::build_parse_tree(tokens)
 }

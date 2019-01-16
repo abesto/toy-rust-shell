@@ -1,4 +1,5 @@
 extern crate im;
+extern crate nix;
 extern crate termion;
 
 use im::{hashmap, HashMap};
@@ -101,7 +102,62 @@ mod builtins {
     }
 }
 
-fn execute(state: &mut State) {}
+mod execute {
+    use crate::parser;
+    use crate::parser::grammar::*;
+    use std::process::{Command as PCommand, Stdio};
+
+    pub fn execute(state: &mut super::State) {
+        let input = &state.command_line;
+        let p = parser::parse(&input);
+        program(p);
+    }
+
+    fn program(p: Program) {
+        for cp in p {
+            match cp {
+                CompleteCommand::WithSep(l, op) => {}
+                CompleteCommand::WithoutSep(l) => list(l),
+            }
+        }
+    }
+
+    fn list(l: List) {
+        match l {
+            List::Single(x) => andor(x),
+            List::Multi(l, op, x) => {}
+        }
+    }
+
+    fn andor(ao: AndOr) {
+        match ao {
+            AndOr::Single(p) => pipeline(p),
+            _ => {}
+        }
+    }
+
+    fn pipeline(p: Pipeline) {
+        for c in p.pipe_sequence {
+            command(c)
+        }
+    }
+
+    fn command(c: Command) {
+        match c {
+            Command::SimpleCommand(d) => simple_command(d),
+            _ => {}
+        }
+    }
+
+    fn simple_command(c: SimpleCommandData) {
+        match c {
+            SimpleCommandData::Name(s) => {
+                let _status = PCommand::new(s).status();
+            }
+            _ => {}
+        }
+    }
+}
 
 fn command_prompt(state: &mut State) -> bool {
     state.reset_command_line();
@@ -111,7 +167,8 @@ fn command_prompt(state: &mut State) -> bool {
         match c.unwrap() {
             Key::Ctrl('d') => return false,
             Key::Char('\n') => {
-                execute(state);
+                println!();
+                execute::execute(state);
                 return true;
             }
             Key::Char(c) => {
