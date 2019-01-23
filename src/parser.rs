@@ -435,13 +435,16 @@ pub mod grammar {
 
     pub type CmdWord = String;
 
+    #[derive(Debug, Eq, PartialEq)]
+    pub struct CmdSuffix {
+        pub redirects: Vec<IORedirect>,
+        pub words: Vec<String>,
+    }
+
     // Placeholders
 
     #[derive(Debug, Eq, PartialEq)]
     pub enum CmdPrefix {}
-
-    #[derive(Debug, Eq, PartialEq)]
-    pub enum CmdSuffix {}
 
     #[derive(Debug, Eq, PartialEq)]
     pub enum CompoundCommandData {}
@@ -451,6 +454,9 @@ pub mod grammar {
 
     #[derive(Debug, Eq, PartialEq)]
     pub enum FunctionDefinitionData {}
+
+    #[derive(Debug, Eq, PartialEq)]
+    pub struct IORedirect {}
 
     pub fn build_parse_tree<'a>(tokens: &Vec<Token>) -> Program<'a> {
         let mut program: Program<'a> = vec![];
@@ -466,14 +472,70 @@ pub mod grammar {
     fn complete_command<'a>(
         iterator: &mut iter::Peekable<slice::Iter<Token>>,
     ) -> Option<CompleteCommand<'a>> {
-        match iterator.next().unwrap() {
-            Token::Word(s) => Some(CompleteCommand::WithoutSep(List::Single(AndOr::Single(
+        match simple_command(iterator) {
+            None => None,
+            Some(c) => Some(CompleteCommand::WithoutSep(List::Single(AndOr::Single(
                 Pipeline {
                     has_bang: false,
-                    pipe_sequence: vec![Command::SimpleCommand(SimpleCommandData::Name(s.clone()))],
+                    pipe_sequence: vec![c],
                 },
             )))),
+        }
+    }
+
+    fn simple_command(iterator: &mut iter::Peekable<slice::Iter<Token>>) -> Option<Command> {
+        match cmd_prefix(iterator) {
+            Some(_prefix) => None, // TODO
+            None => match cmd_name(iterator) {
+                None => None,
+                Some(name) => match cmd_suffix(iterator) {
+                    None => Some(Command::SimpleCommand(SimpleCommandData::Name(name))),
+                    Some(suffix) => Some(Command::SimpleCommand(SimpleCommandData::NameSuffix(
+                        name, suffix,
+                    ))),
+                },
+            },
+        }
+    }
+
+    fn cmd_prefix(iterator: &mut iter::Peekable<slice::Iter<Token>>) -> Option<CmdPrefix> {
+        None
+    }
+
+    fn word(iterator: &mut iter::Peekable<slice::Iter<Token>>) -> Option<String> {
+        match iterator.peek() {
+            Some(Token::Word(word)) => {
+                iterator.next();
+                Some(word.to_string())
+            }
             _ => None,
+        }
+    }
+
+    fn cmd_name(iterator: &mut iter::Peekable<slice::Iter<Token>>) -> Option<CmdName> {
+        word(iterator)
+    }
+
+    fn cmd_suffix(iterator: &mut iter::Peekable<slice::Iter<Token>>) -> Option<CmdSuffix> {
+        // TODO io_redirect
+        let mut suffix = CmdSuffix {
+            redirects: vec![],
+            words: vec![],
+        };
+
+        loop {
+            match word(iterator) {
+                None => break,
+                Some(word) => {
+                    suffix.words.push(word);
+                }
+            }
+        }
+
+        if suffix.redirects.is_empty() && suffix.words.is_empty() {
+            None
+        } else {
+            Some(suffix)
         }
     }
 
@@ -499,6 +561,25 @@ pub mod grammar {
                         has_bang: false,
                         pipe_sequence: vec![Command::SimpleCommand(SimpleCommandData::Name(
                             "ls".to_string(),
+                        ))],
+                    },
+                )))],
+            )
+        }
+
+        #[test]
+        fn ls_l() {
+            assert_tree(
+                "ls -l \t -a    /",
+                vec![CompleteCommand::WithoutSep(List::Single(AndOr::Single(
+                    Pipeline {
+                        has_bang: false,
+                        pipe_sequence: vec![Command::SimpleCommand(SimpleCommandData::NameSuffix(
+                            "ls".to_string(),
+                            CmdSuffix {
+                                redirects: vec![],
+                                words: vec!["-l".to_string(), "-a".to_string(), "/".to_string()],
+                            },
                         ))],
                     },
                 )))],

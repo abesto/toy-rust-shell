@@ -6,12 +6,10 @@ use im::{hashmap, HashMap};
 use std::io::{stdin, Stdout};
 use termion::event::Key;
 use termion::input::TermRead;
-use termion::raw::RawTerminal;
 
 mod parser;
 
 pub struct State {
-    terminal: RawTerminal<Stdout>,
     variables: HashMap<String, String>,
     command_line: String,
     cursor_index: usize,
@@ -19,9 +17,8 @@ pub struct State {
 }
 
 impl State {
-    fn new(terminal: RawTerminal<Stdout>) -> State {
+    fn new() -> State {
         State {
-            terminal,
             variables: hashmap! {},
             command_line: String::new(),
             cursor_index: 0,
@@ -65,11 +62,11 @@ mod term {
         return terminal;
     }
 
-    pub fn update_prompt(state: &mut State) {
+    pub fn update_commandline(state: &mut State, terminal: &mut RawTerminal<Stdout>) {
         let default_ps1 = &String::new();
         let ps1 = state.variables.get("PS1").unwrap_or(default_ps1);
         write!(
-            state.terminal,
+            terminal,
             "{}{}{}{}{}",
             termion::cursor::Hide,
             termion::clear::CurrentLine,
@@ -80,14 +77,14 @@ mod term {
         .unwrap();
         if state.cursor_index < state.command_line.len() {
             write!(
-                state.terminal,
+                terminal,
                 "{}",
                 termion::cursor::Left((state.command_line.len() - state.cursor_index) as u16)
             )
             .unwrap();
         }
-        write!(state.terminal, "{}", termion::cursor::Show).unwrap();
-        state.terminal.flush().unwrap();
+        write!(terminal, "{}", termion::cursor::Show).unwrap();
+        terminal.flush().unwrap();
     }
 }
 
@@ -105,7 +102,7 @@ mod builtins {
 mod execute {
     use crate::parser;
     use crate::parser::grammar::*;
-    use std::process::{Command as PCommand, Stdio};
+    use std::process::Command as PCommand;
 
     pub fn execute(state: &mut super::State) {
         let input = &state.command_line;
@@ -154,22 +151,35 @@ mod execute {
             SimpleCommandData::Name(s) => {
                 let _status = PCommand::new(s).status();
             }
+            SimpleCommandData::NameSuffix(name, suffix) => {
+                // TODO io redirects
+                let _status = PCommand::new(name).args(suffix.words).status();
+            }
             _ => {}
         }
     }
 }
 
-fn command_prompt(state: &mut State) -> bool {
+enum CommandPromptResult {
+    Exit,
+    Execute,
+}
+
+fn command_prompt(state: &mut State) -> CommandPromptResult {
+    let mut terminal = term::setup_terminal();
     state.reset_command_line();
-    term::update_prompt(state);
+    term::update_commandline(state, &mut terminal);
 
     for c in stdin().keys() {
         match c.unwrap() {
-            Key::Ctrl('d') => return false,
+            Key::Ctrl('d') => return CommandPromptResult::Exit,
             Key::Char('\n') => {
-                println!();
-                execute::execute(state);
-                return true;
+                print!("\r\n");
+                return CommandPromptResult::Execute;
+            }
+            Key::Backspace => {
+                state.cursor_index -= 1;
+                state.command_line.remove(state.cursor_index);
             }
             Key::Char(c) => {
                 state.command_line.insert(state.cursor_index, c);
@@ -187,18 +197,18 @@ fn command_prompt(state: &mut State) -> bool {
             }
             _ => continue,
         };
-        term::update_prompt(state);
+        term::update_commandline(state, &mut terminal);
     }
 
-    return true;
+    CommandPromptResult::Exit
 }
 
 fn main() {
-    let mut state =
-        State::new(term::setup_terminal()).set_variable(String::from("PS1"), String::from("$ "));
+    let mut state = State::new().set_variable(String::from("PS1"), String::from("$ "));
     loop {
-        if !(command_prompt(&mut state)) {
-            break;
+        match command_prompt(&mut state) {
+            CommandPromptResult::Exit => break,
+            CommandPromptResult::Execute => execute::execute(&mut state),
         }
     }
 }
