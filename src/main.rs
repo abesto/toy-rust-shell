@@ -1,11 +1,13 @@
 extern crate im;
 extern crate nix;
 extern crate termion;
+#[macro_use] extern crate itertools;
 
 use im::{hashmap, HashMap};
 use std::io::{stdin, Stdout};
 use termion::event::Key;
 use termion::input::TermRead;
+
 
 mod parser;
 
@@ -178,8 +180,10 @@ fn command_prompt(state: &mut State) -> CommandPromptResult {
                 return CommandPromptResult::Execute;
             }
             Key::Backspace => {
-                state.cursor_index -= 1;
-                state.command_line.remove(state.cursor_index);
+                if state.cursor_index > 0 {
+                    state.cursor_index -= 1;
+                    state.command_line.remove(state.cursor_index);
+                }
             }
             Key::Char(c) => {
                 state.command_line.insert(state.cursor_index, c);

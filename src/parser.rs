@@ -1,5 +1,3 @@
-// TODO add the rest of the characters that can start operators
-
 mod split_words {
     /*
      * http://pubs.opengroup.org/onlinepubs/9699919799/utilities/V3_chap02.html#tag_18_03
@@ -376,6 +374,8 @@ mod lexer {
 
 pub mod grammar {
     use super::lexer::Token;
+    use itertools::multipeek;
+    use itertools::structs::MultiPeek;
     use std::iter;
     use std::slice;
 
@@ -460,7 +460,7 @@ pub mod grammar {
 
     pub fn build_parse_tree<'a>(tokens: &Vec<Token>) -> Program<'a> {
         let mut program: Program<'a> = vec![];
-        let mut iterator = tokens.iter().peekable();
+        let mut iterator = multipeek(tokens);
 
         while iterator.peek().is_some() {
             program.push(complete_command(&mut iterator).unwrap());
@@ -470,20 +470,38 @@ pub mod grammar {
     }
 
     fn complete_command<'a>(
-        iterator: &mut iter::Peekable<slice::Iter<Token>>,
+        iterator: &mut MultiPeek<slice::Iter<Token>>,
     ) -> Option<CompleteCommand<'a>> {
-        match simple_command(iterator) {
+        match list(iterator) {
             None => None,
-            Some(c) => Some(CompleteCommand::WithoutSep(List::Single(AndOr::Single(
-                Pipeline {
-                    has_bang: false,
-                    pipe_sequence: vec![c],
-                },
-            )))),
+            Some(list) => {
+                match separator_op(iterator) {
+                    None => Some(CompleteCommand::WithoutSep(list)),
+                    Some(sep) => Some(CompleteCommand::WithSep(list, sep))
+                }
+            }
         }
     }
 
-    fn simple_command(iterator: &mut iter::Peekable<slice::Iter<Token>>) -> Option<Command> {
+    fn accept<I, T>(iterator: &mut MultiPeek<I>, retval: T) -> Option<T> where I: Iterator {
+        for i in 0..iterator.index {
+            iterator.next();
+        }
+        iterator.reset_peek()
+        Some(retval)
+    }
+
+    fn separator_op(
+        iterator: &mut MultiPeek<slice::Iter<Token>>,
+    ) -> Option<SeparatorOp> {
+        match iterator.peek() {
+            Token::Operator(';') => accept(iterator, SeparatorOp::Semicolon),
+            Token::Operator('&') => accept(iterator, SeparatorOp::Ampersand),
+
+        }
+    }
+
+    fn simple_command(iterator: &mut MultiPeek<slice::Iter<Token>>) -> Option<Command> {
         match cmd_prefix(iterator) {
             Some(_prefix) => None, // TODO
             None => match cmd_name(iterator) {
@@ -498,11 +516,11 @@ pub mod grammar {
         }
     }
 
-    fn cmd_prefix(iterator: &mut iter::Peekable<slice::Iter<Token>>) -> Option<CmdPrefix> {
+    fn cmd_prefix(iterator: &mut MultiPeek<slice::Iter<Token>>) -> Option<CmdPrefix> {
         None
     }
 
-    fn word(iterator: &mut iter::Peekable<slice::Iter<Token>>) -> Option<String> {
+    fn word(iterator: &mut MultiPeek<slice::Iter<Token>>) -> Option<String> {
         match iterator.peek() {
             Some(Token::Word(word)) => {
                 iterator.next();
@@ -512,11 +530,11 @@ pub mod grammar {
         }
     }
 
-    fn cmd_name(iterator: &mut iter::Peekable<slice::Iter<Token>>) -> Option<CmdName> {
+    fn cmd_name(iterator: &mut MultiPeek<slice::Iter<Token>>) -> Option<CmdName> {
         word(iterator)
     }
 
-    fn cmd_suffix(iterator: &mut iter::Peekable<slice::Iter<Token>>) -> Option<CmdSuffix> {
+    fn cmd_suffix(iterator: &mut MultiPeek<slice::Iter<Token>>) -> Option<CmdSuffix> {
         // TODO io_redirect
         let mut suffix = CmdSuffix {
             redirects: vec![],
@@ -583,6 +601,59 @@ pub mod grammar {
                         ))],
                     },
                 )))],
+            )
+        }
+
+        #[test]
+        fn separators() {
+            assert_tree(
+                "echo foo; uptime& ls",
+                vec![CompleteCommand::WithoutSep(
+                    List::Multi(
+                        &List::Multi(
+                            &List::Single(
+                                AndOr::Single(
+                                    Pipeline {
+                                        has_bang: false,
+                                        pipe_sequence: vec![Command::SimpleCommand(SimpleCommandData::NameSuffix(
+                                            "echo".to_string(),
+                                            CmdSuffix {
+                                                redirects: vec![],
+                                                words: vec!["foo".to_string()],
+                                            },
+                                        ))],
+                                    },
+                                )
+                            ),
+                            SeparatorOp::Semicolon,
+                            AndOr::Single(
+                                Pipeline {
+                                    has_bang: false,
+                                    pipe_sequence: vec![Command::SimpleCommand(SimpleCommandData::NameSuffix(
+                                        "uptime".to_string(),
+                                        CmdSuffix {
+                                            redirects: vec![],
+                                            words: vec![],
+                                        },
+                                    ))],
+                                },
+                            )
+                        ),
+                        SeparatorOp::Ampersand,
+                        AndOr::Single(
+                            Pipeline {
+                                has_bang: false,
+                                pipe_sequence: vec![Command::SimpleCommand(SimpleCommandData::NameSuffix(
+                                    "ls".to_string(),
+                                    CmdSuffix {
+                                        redirects: vec![],
+                                        words: vec![],
+                                    },
+                                ))],
+                            },
+                        )
+                    )
+                )],
             )
         }
     }
