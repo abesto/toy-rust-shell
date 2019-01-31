@@ -1,7 +1,6 @@
 extern crate im;
 extern crate nix;
 extern crate termion;
-#[macro_use] extern crate itertools;
 
 use im::{hashmap, HashMap};
 use std::io::{stdin, Stdout};
@@ -108,23 +107,31 @@ mod execute {
 
     pub fn execute(state: &mut super::State) {
         let input = &state.command_line;
-        let p = parser::parse(&input);
-        program(p);
+        let r = parser::parse(&input);
+        program(r);
     }
 
     fn program(p: Program) {
-        for cp in p {
-            match cp {
-                CompleteCommand::WithSep(l, op) => {}
-                CompleteCommand::WithoutSep(l) => list(l),
-            }
+        for c in p {
+            complete_command(c)
+        }
+    }
+
+    fn complete_command(c: CompleteCommand) {
+        match c {
+            CompleteCommand::WithSep(l, op) => {}
+            CompleteCommand::WithoutSep(l) => list(l),
         }
     }
 
     fn list(l: List) {
         match l {
             List::Single(x) => andor(x),
-            List::Multi(l, op, x) => {}
+            List::Multi(x, SeparatorOp::Semicolon, r) => {
+                andor(x);
+                list(*r);
+            }
+            _ => {}
         }
     }
 

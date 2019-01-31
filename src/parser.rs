@@ -374,10 +374,164 @@ mod lexer {
 
 pub mod grammar {
     use super::lexer::Token;
-    use itertools::multipeek;
-    use itertools::structs::MultiPeek;
-    use std::iter;
-    use std::slice;
+
+    pub struct Parser<'a> {
+        tokens: Vec<Token>,
+        program: Program<'a>,
+        cursor: usize
+    }
+
+    impl<'a> Parser<'a> {
+        pub fn parse(tokens: Vec<Token>) -> Vec<CompleteCommand<'a>> {
+            let mut parser = Parser {tokens, program: vec![], cursor: 0};
+            parser.run();
+            parser.program
+        }
+
+        fn next(&mut self) -> Option<&Token> {
+            if self.cursor >= self.tokens.len() {
+                None
+            } else {
+                let val = Some(&self.tokens[self.cursor]);
+                self.cursor += 1;
+                val
+            }
+        }
+
+        fn checkpoint<T>(&mut self, matcher: fn(p: &mut Parser) -> Option<T>) -> Option<T> {
+            let checkpoint = self.cursor;
+            let val = matcher(self);
+            if val.is_none() {
+                self.cursor = checkpoint;
+            }
+            val
+        }
+
+        fn run(&mut self) {
+            loop {
+                match self.complete_command() {
+                    None => break,
+                    Some(c) => self.program.push(c)
+                }
+            }
+        }
+
+        fn separator_op(&mut self) -> Option<SeparatorOp> {
+            self.checkpoint(|parser| match parser.next() {
+                    Some(Token::Operator(';')) => Some(SeparatorOp::Semicolon),
+                    Some(Token::Operator('&')) => Some(SeparatorOp::Ampersand),
+                    _ => None
+                }
+            )
+        }
+
+        fn complete_command(&mut self) -> Option<CompleteCommand<'a>> {
+            self.checkpoint(|parser| parser.list().map(|list|
+                match parser.separator_op() {
+                    None => CompleteCommand::WithoutSep(list),
+                    Some(sep) => CompleteCommand::WithSep(list, sep)
+                }
+            ))
+        }
+
+        fn list<'b>(&mut self) -> Option<List<'b>> {
+            self.and_or().map(|left|
+                             match self.checkpoint(
+                                 |parser| parser.separator_op().and_then(
+                                     |op| parser.list().map(
+                                         |list| (op, list)
+                                     ))) {
+                                 Some((op, right)) => List::Multi(left, op, Box::new(right)),
+                                 None => List::Single(left)
+                             }
+            )
+        }
+
+        fn and_or<'b>(&mut self) -> Option<AndOr<'b>> {
+            // TODO
+            self.checkpoint(
+                |parser| parser.pipeline().map(
+                    |p| AndOr::Single(p)
+                )
+            )
+        }
+
+        fn pipeline(&mut self) -> Option<Pipeline> {
+            // TODO
+            self.checkpoint(
+                |parser| parser.pipe_sequence().map(
+                    |pipe_sequence| Pipeline{has_bang: false, pipe_sequence}
+                )
+            )
+        }
+
+        fn pipe_sequence(&mut self) -> Option<PipeSequence> {
+            // TODO
+            self.checkpoint(
+                |parser| parser.command().map(|c| vec![c])
+            )
+        }
+
+        fn command(&mut self) -> Option<Command> {
+            // TODO
+            self.simple_command()
+        }
+
+        fn simple_command(&mut self) -> Option<Command> {
+            self.checkpoint(|parser| match parser.cmd_prefix() {
+                Some(_prefix) => None,  // TODO
+                None => parser.cmd_name().map(
+                    |name| match parser.cmd_suffix() {
+                        None => Command::SimpleCommand(SimpleCommandData::Name(name)),
+                        Some(suffix) => Command::SimpleCommand(SimpleCommandData::NameSuffix(
+                            name, suffix,
+                        )),
+                    }
+                )
+            })
+        }
+
+        fn cmd_prefix(&mut self) -> Option<CmdPrefix> {
+            None
+        }
+
+        fn word(&mut self) -> Option<String> {
+            self.checkpoint(|parser| match parser.next() {
+                Some(Token::Word(word)) => Some(word.to_string()),
+                _ => None,
+            })
+        }
+
+        fn cmd_name(&mut self) -> Option<CmdName> {
+            self.word()
+        }
+
+        fn cmd_suffix(&mut self) -> Option<CmdSuffix> {
+            // TODO io_redirect
+            self.checkpoint(|parser| {
+                let mut suffix = CmdSuffix {
+                    redirects: vec![],
+                    words: vec![],
+                };
+
+                loop {
+                    match parser.word() {
+                        None => break,
+                        Some(word) => {
+                            suffix.words.push(word);
+                        }
+                    }
+                }
+
+                if suffix.redirects.is_empty() && suffix.words.is_empty() {
+                    None
+                } else {
+                    Some(suffix)
+                }
+            })
+        }
+    }
+
 
     pub type Program<'a> = Vec<CompleteCommand<'a>>;
 
@@ -390,7 +544,7 @@ pub mod grammar {
     #[derive(Debug, Eq, PartialEq)]
     pub enum List<'a> {
         Single(AndOr<'a>),
-        Multi(&'a List<'a>, SeparatorOp, AndOr<'a>),
+        Multi(AndOr<'a>, SeparatorOp, Box<List<'a>>),
     }
 
     #[derive(Debug, Eq, PartialEq)]
@@ -441,8 +595,6 @@ pub mod grammar {
         pub words: Vec<String>,
     }
 
-    // Placeholders
-
     #[derive(Debug, Eq, PartialEq)]
     pub enum CmdPrefix {}
 
@@ -457,105 +609,6 @@ pub mod grammar {
 
     #[derive(Debug, Eq, PartialEq)]
     pub struct IORedirect {}
-
-    pub fn build_parse_tree<'a>(tokens: &Vec<Token>) -> Program<'a> {
-        let mut program: Program<'a> = vec![];
-        let mut iterator = multipeek(tokens);
-
-        while iterator.peek().is_some() {
-            program.push(complete_command(&mut iterator).unwrap());
-        }
-
-        program
-    }
-
-    fn complete_command<'a>(
-        iterator: &mut MultiPeek<slice::Iter<Token>>,
-    ) -> Option<CompleteCommand<'a>> {
-        match list(iterator) {
-            None => None,
-            Some(list) => {
-                match separator_op(iterator) {
-                    None => Some(CompleteCommand::WithoutSep(list)),
-                    Some(sep) => Some(CompleteCommand::WithSep(list, sep))
-                }
-            }
-        }
-    }
-
-    fn accept<I, T>(iterator: &mut MultiPeek<I>, retval: T) -> Option<T> where I: Iterator {
-        for i in 0..iterator.index {
-            iterator.next();
-        }
-        iterator.reset_peek()
-        Some(retval)
-    }
-
-    fn separator_op(
-        iterator: &mut MultiPeek<slice::Iter<Token>>,
-    ) -> Option<SeparatorOp> {
-        match iterator.peek() {
-            Token::Operator(';') => accept(iterator, SeparatorOp::Semicolon),
-            Token::Operator('&') => accept(iterator, SeparatorOp::Ampersand),
-
-        }
-    }
-
-    fn simple_command(iterator: &mut MultiPeek<slice::Iter<Token>>) -> Option<Command> {
-        match cmd_prefix(iterator) {
-            Some(_prefix) => None, // TODO
-            None => match cmd_name(iterator) {
-                None => None,
-                Some(name) => match cmd_suffix(iterator) {
-                    None => Some(Command::SimpleCommand(SimpleCommandData::Name(name))),
-                    Some(suffix) => Some(Command::SimpleCommand(SimpleCommandData::NameSuffix(
-                        name, suffix,
-                    ))),
-                },
-            },
-        }
-    }
-
-    fn cmd_prefix(iterator: &mut MultiPeek<slice::Iter<Token>>) -> Option<CmdPrefix> {
-        None
-    }
-
-    fn word(iterator: &mut MultiPeek<slice::Iter<Token>>) -> Option<String> {
-        match iterator.peek() {
-            Some(Token::Word(word)) => {
-                iterator.next();
-                Some(word.to_string())
-            }
-            _ => None,
-        }
-    }
-
-    fn cmd_name(iterator: &mut MultiPeek<slice::Iter<Token>>) -> Option<CmdName> {
-        word(iterator)
-    }
-
-    fn cmd_suffix(iterator: &mut MultiPeek<slice::Iter<Token>>) -> Option<CmdSuffix> {
-        // TODO io_redirect
-        let mut suffix = CmdSuffix {
-            redirects: vec![],
-            words: vec![],
-        };
-
-        loop {
-            match word(iterator) {
-                None => break,
-                Some(word) => {
-                    suffix.words.push(word);
-                }
-            }
-        }
-
-        if suffix.redirects.is_empty() && suffix.words.is_empty() {
-            None
-        } else {
-            Some(suffix)
-        }
-    }
 
     #[cfg(test)]
     mod tests {
@@ -607,50 +660,50 @@ pub mod grammar {
         #[test]
         fn separators() {
             assert_tree(
-                "echo foo; uptime& ls",
+                "echo foo; uptime& ls /",
                 vec![CompleteCommand::WithoutSep(
                     List::Multi(
-                        &List::Multi(
-                            &List::Single(
-                                AndOr::Single(
-                                    Pipeline {
-                                        has_bang: false,
-                                        pipe_sequence: vec![Command::SimpleCommand(SimpleCommandData::NameSuffix(
-                                            "echo".to_string(),
-                                            CmdSuffix {
-                                                redirects: vec![],
-                                                words: vec!["foo".to_string()],
-                                            },
-                                        ))],
-                                    },
-                                )
-                            ),
-                            SeparatorOp::Semicolon,
-                            AndOr::Single(
-                                Pipeline {
-                                    has_bang: false,
-                                    pipe_sequence: vec![Command::SimpleCommand(SimpleCommandData::NameSuffix(
-                                        "uptime".to_string(),
-                                        CmdSuffix {
-                                            redirects: vec![],
-                                            words: vec![],
-                                        },
-                                    ))],
-                                },
-                            )
-                        ),
-                        SeparatorOp::Ampersand,
                         AndOr::Single(
                             Pipeline {
                                 has_bang: false,
                                 pipe_sequence: vec![Command::SimpleCommand(SimpleCommandData::NameSuffix(
-                                    "ls".to_string(),
+                                    "echo".to_string(),
                                     CmdSuffix {
                                         redirects: vec![],
-                                        words: vec![],
+                                        words: vec!["foo".to_string()],
                                     },
                                 ))],
                             },
+                        ),
+                        SeparatorOp::Semicolon,
+                        Box::new(
+                            List::Multi(
+                                AndOr::Single(
+                                    Pipeline {
+                                        has_bang: false,
+                                        pipe_sequence: vec![Command::SimpleCommand(SimpleCommandData::Name(
+                                            "uptime".to_string(),
+                                        ))],
+                                    },
+                                ),
+                                SeparatorOp::Ampersand,
+                                Box::new(
+                                    List::Single(
+                                        AndOr::Single(
+                                            Pipeline {
+                                                has_bang: false,
+                                                pipe_sequence: vec![Command::SimpleCommand(SimpleCommandData::NameSuffix(
+                                                    "ls".to_string(),
+                                                    CmdSuffix {
+                                                        redirects: vec![],
+                                                        words: vec!["/".to_string()],
+                                                    },
+                                                ))],
+                                            },
+                                        )
+                                    )
+                                ),
+                            )
                         )
                     )
                 )],
@@ -659,8 +712,8 @@ pub mod grammar {
     }
 }
 
-pub fn parse<'a>(input: &String) -> grammar::Program<'a> {
+pub fn parse(input: &String) -> grammar::Program {
     let words = &split_words::scan(&input);
-    let tokens = &lexer::scan(&words);
-    grammar::build_parse_tree(tokens)
+    let tokens = lexer::scan(&words);
+    grammar::Parser::parse(tokens)
 }
