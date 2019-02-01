@@ -156,15 +156,55 @@ mod execute {
     }
 
     fn simple_command(c: SimpleCommandData) {
+        if !try_execute_builtin(&c) {
+            match c {
+                SimpleCommandData::Name(s) => {
+                    let _status = PCommand::new(s).status();
+                }
+                SimpleCommandData::NameSuffix(name, suffix) => {
+                    // TODO io redirects
+                    let _status = PCommand::new(name).args(suffix.words).status();
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn cd_home() {
+        std::env::set_current_dir(std::path::Path::new(
+            &std::env::var("HOME").unwrap_or("/".to_string())
+        ));
+    }
+
+    fn cd(dir: &String) {
+        std::env::set_current_dir(std::path::Path::new(
+            dir
+        ));
+    }
+
+    fn try_execute_builtin(c: &SimpleCommandData) -> bool {
         match c {
-            SimpleCommandData::Name(s) => {
-                let _status = PCommand::new(s).status();
+            SimpleCommandData::Name(cmd) => {
+                if cmd == "cd" {
+                    cd_home();
+                    true
+                } else {
+                    false
+                }
             }
-            SimpleCommandData::NameSuffix(name, suffix) => {
-                // TODO io redirects
-                let _status = PCommand::new(name).args(suffix.words).status();
+            SimpleCommandData::NameSuffix(cmd, suffix) => {
+                if cmd == "cd" {
+                    if suffix.words.len() > 1 {
+                        println!("cd received too many arguments");
+                    } else {
+                        cd(&suffix.words[0]);
+                    }
+                    true
+                } else {
+                    false
+                }
             }
-            _ => {}
+            _ => false
         }
     }
 }
